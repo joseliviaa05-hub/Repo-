@@ -97,6 +97,9 @@ class DraggableImageItem(QGraphicsPixmapItem):
         self.resize_start_pixmap = None
         self.hovered_handle = None
         
+        # Tooltip de transformación
+        self.tooltip = None
+        
         # Transformación
         self.setTransformOriginPoint(self.boundingRect().center())
         self.setRotation(canvas_item.rotation)
@@ -304,6 +307,11 @@ class DraggableImageItem(QGraphicsPixmapItem):
             if handle_type == 'rotation':
                 self.is_rotating = True
                 self.resize_start_pos = event.scenePos()
+                # Crear tooltip
+                if not self.tooltip:
+                    self.tooltip = TransformTooltip()
+                    self.scene().addItem(self.tooltip)
+                    self.scene().addItem(self.tooltip.background)
                 event.accept()
                 return
             elif handle_type:
@@ -313,6 +321,11 @@ class DraggableImageItem(QGraphicsPixmapItem):
                 self.resize_start_pos = event.scenePos()
                 self.resize_start_rect = self.boundingRect()
                 self.resize_start_pixmap = self.pixmap()
+                # Crear tooltip
+                if not self.tooltip:
+                    self.tooltip = TransformTooltip()
+                    self.scene().addItem(self.tooltip)
+                    self.scene().addItem(self.tooltip.background)
                 event.accept()
                 return
         
@@ -325,7 +338,6 @@ class DraggableImageItem(QGraphicsPixmapItem):
             scene_pos = event.scenePos()
             local_center = self.mapToScene(center)
             
-            import math
             angle = math.degrees(math.atan2(
                 scene_pos.y() - local_center.y(),
                 scene_pos.x() - local_center.x()
@@ -345,6 +357,12 @@ class DraggableImageItem(QGraphicsPixmapItem):
             
             self.setRotation(angle)
             self.canvas_item.rotation = angle
+            
+            # Mostrar tooltip con ángulo
+            if self.tooltip:
+                tooltip_pos = self.mapToScene(self.boundingRect().center())
+                self.tooltip.show_at(tooltip_pos.x(), tooltip_pos.y() - 50, f"{int(angle)}°")
+            
             event.accept()
             
         elif self.is_resizing:
@@ -381,6 +399,15 @@ class DraggableImageItem(QGraphicsPixmapItem):
                 )
                 self.setPixmap(scaled_pixmap)
                 
+                # Mostrar tooltip con dimensiones
+                if self.tooltip:
+                    dpi = self.canvas_editor.canvas_dpi
+                    width_cm = pixels_to_cm(new_width, dpi)
+                    height_cm = pixels_to_cm(new_height, dpi)
+                    tooltip_pos = self.mapToScene(self.boundingRect().center())
+                    self.tooltip.show_at(tooltip_pos.x(), tooltip_pos.y() - 50, 
+                                       f"{width_cm:.1f} × {height_cm:.1f} cm")
+                
             elif self.resize_side:
                 # Deformar desde lado
                 new_width = current_pixmap.width()
@@ -401,6 +428,15 @@ class DraggableImageItem(QGraphicsPixmapItem):
                     Qt.TransformationMode.SmoothTransformation
                 )
                 self.setPixmap(scaled_pixmap)
+                
+                # Mostrar tooltip con dimensiones
+                if self.tooltip:
+                    dpi = self.canvas_editor.canvas_dpi
+                    width_cm = pixels_to_cm(new_width, dpi)
+                    height_cm = pixels_to_cm(new_height, dpi)
+                    tooltip_pos = self.mapToScene(self.boundingRect().center())
+                    self.tooltip.show_at(tooltip_pos.x(), tooltip_pos.y() - 50, 
+                                       f"{width_cm:.1f} × {height_cm:.1f} cm")
             
             event.accept()
         else:
@@ -411,6 +447,9 @@ class DraggableImageItem(QGraphicsPixmapItem):
             self.is_rotating = False
             self.canvas_editor.update_properties_from_selection()
             self.canvas_editor.save_history_state()
+            # Ocultar tooltip
+            if self.tooltip:
+                self.tooltip.hide()
             event.accept()
         elif self.is_resizing:
             self.is_resizing = False
@@ -420,6 +459,9 @@ class DraggableImageItem(QGraphicsPixmapItem):
             self.canvas_item.height = pixels_to_cm(self.pixmap().height(), dpi)
             self.canvas_editor.update_properties_from_selection()
             self.canvas_editor.save_history_state()
+            # Ocultar tooltip
+            if self.tooltip:
+                self.tooltip.hide()
             event.accept()
         else:
             super().mouseReleaseEvent(event)
@@ -676,6 +718,45 @@ class TemplateEditorDialog(QDialog):
         )
 
 # ==================== Sistema de Guías Inteligentes ====================
+
+class TransformTooltip(QGraphicsTextItem):
+    """Tooltip para mostrar información durante transformación (estilo Canva)"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setDefaultTextColor(QColor(255, 255, 255))
+        self.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+        self.setZValue(10000)
+        
+        # Fondo del tooltip
+        self.background = QGraphicsRectItem(parent)
+        self.background.setBrush(QBrush(QColor(45, 45, 45, 230)))
+        self.background.setPen(QPen(QColor(0, 196, 204), 1))
+        self.background.setZValue(9999)
+        self.hide()
+    
+    def show_at(self, x, y, text):
+        """Muestra tooltip en posición específica"""
+        self.setPlainText(text)
+        self.setPos(x - self.boundingRect().width() / 2, y - 35)
+        
+        # Actualizar fondo
+        rect = self.boundingRect()
+        padding = 6
+        self.background.setRect(
+            x - rect.width() / 2 - padding,
+            y - 35 - padding,
+            rect.width() + padding * 2,
+            rect.height() + padding * 2
+        )
+        
+        self.setVisible(True)
+        self.background.setVisible(True)
+    
+    def hide(self):
+        """Oculta tooltip"""
+        self.setVisible(False)
+        self.background.setVisible(False)
 
 class SmartGuides:
     """Sistema de guías de alineación inteligentes (estilo Canva)"""
