@@ -203,6 +203,7 @@ class Transform:
     width: float = 100
     height: float = 100
     rotation: float = 0
+    opacity: float = 1.0  # 0.0 a 1.0
     
 # ==================== UTILIDADES MATEMÁTICAS ====================
 
@@ -1371,6 +1372,24 @@ class CanvasEditor(QMainWindow):
         color_group.setLayout(color_layout)
         props_layout.addWidget(color_group)
         
+        # Control de opacidad
+        opacity_group = QGroupBox("Opacidad")
+        opacity_layout = QVBoxLayout()
+        
+        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.opacity_slider.setMinimum(0)
+        self.opacity_slider.setMaximum(100)
+        self.opacity_slider.setValue(100)
+        self.opacity_slider.valueChanged.connect(self.change_opacity)
+        opacity_layout.addWidget(self.opacity_slider)
+        
+        self.opacity_label = QLabel("100%")
+        self.opacity_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        opacity_layout.addWidget(self.opacity_label)
+        
+        opacity_group.setLayout(opacity_layout)
+        props_layout.addWidget(opacity_group)
+        
         props_layout.addStretch()
         
         tabs.addTab(props_widget, "Propiedades")
@@ -1515,16 +1534,39 @@ class CanvasEditor(QMainWindow):
         layout.addSpacing(10)
         
         # Botón alinear izquierda
-        align_left_btn = QPushButton("⬅️ Alinear Izq")
+        align_left_btn = QPushButton("⬅️")
+        align_left_btn.setToolTip("Alinear Izquierda")
         align_left_btn.setStyleSheet(self.get_tool_button_style())
         align_left_btn.clicked.connect(self.align_left)
         layout.addWidget(align_left_btn)
         
         # Botón alinear centro
-        align_center_btn = QPushButton("➡️ Centrar")
+        align_center_btn = QPushButton("⬌")
+        align_center_btn.setToolTip("Centrar Horizontalmente")
         align_center_btn.setStyleSheet(self.get_tool_button_style())
         align_center_btn.clicked.connect(self.align_center)
         layout.addWidget(align_center_btn)
+        
+        # Botón alinear derecha
+        align_right_btn = QPushButton("➡️")
+        align_right_btn.setToolTip("Alinear Derecha")
+        align_right_btn.setStyleSheet(self.get_tool_button_style())
+        align_right_btn.clicked.connect(self.align_right)
+        layout.addWidget(align_right_btn)
+        
+        # Botón alinear arriba
+        align_top_btn = QPushButton("⬆️")
+        align_top_btn.setToolTip("Alinear Arriba")
+        align_top_btn.setStyleSheet(self.get_tool_button_style())
+        align_top_btn.clicked.connect(self.align_top)
+        layout.addWidget(align_top_btn)
+        
+        # Botón alinear abajo
+        align_bottom_btn = QPushButton("⬇️")
+        align_bottom_btn.setToolTip("Alinear Abajo")
+        align_bottom_btn.setStyleSheet(self.get_tool_button_style())
+        align_bottom_btn.clicked.connect(self.align_bottom)
+        layout.addWidget(align_bottom_btn)
         
         # Separador
         layout.addSpacing(10)
@@ -1592,6 +1634,18 @@ class CanvasEditor(QMainWindow):
         new_action.setShortcut("Ctrl+N")
         new_action.triggered.connect(self.new_project)
         file_menu.addAction(new_action)
+        
+        file_menu.addSeparator()
+        
+        save_action = QAction("Guardar Proyecto...", self)
+        save_action.setShortcut("Ctrl+S")
+        save_action.triggered.connect(self.save_project)
+        file_menu.addAction(save_action)
+        
+        load_action = QAction("Abrir Proyecto...", self)
+        load_action.setShortcut("Ctrl+O")
+        load_action.triggered.connect(self.load_project)
+        file_menu.addAction(load_action)
         
         file_menu.addSeparator()
         
@@ -1718,6 +1772,10 @@ class CanvasEditor(QMainWindow):
         width_px = cm_to_px(self.canvas_width_cm, self.canvas_dpi)
         height_px = cm_to_px(self.canvas_height_cm, self.canvas_dpi)
         
+        # Grid de fondo (si está activado)
+        if self.show_grid:
+            self.draw_grid(width_px, height_px)
+        
         self.canvas_rect = QGraphicsRectItem(0, 0, width_px, height_px)
         self.canvas_rect.setBrush(QBrush(QColor("white")))
         self.canvas_rect.setPen(QPen(QColor("#CCCCCC"), 1))
@@ -1732,6 +1790,26 @@ class CanvasEditor(QMainWindow):
         )
         
         QTimer.singleShot(100, self.fit_to_view)
+    
+    def draw_grid(self, width, height):
+        """Dibujar grid en el canvas"""
+        pen = QPen(QColor("#E0E0E0"))
+        pen.setStyle(Qt.PenStyle.DotLine)
+        pen.setCosmetic(True)
+        
+        # Líneas verticales
+        for x in range(0, int(width), self.grid_size):
+            line = QGraphicsLineItem(x, 0, x, height)
+            line.setPen(pen)
+            line.setZValue(-999)
+            self.scene.addItem(line)
+        
+        # Líneas horizontales
+        for y in range(0, int(height), self.grid_size):
+            line = QGraphicsLineItem(0, y, width, y)
+            line.setPen(pen)
+            line.setZValue(-999)
+            self.scene.addItem(line)
     
     # ==================== FUNCIONES DE IMÁGENES ====================
     
@@ -1958,6 +2036,17 @@ class CanvasEditor(QMainWindow):
         """Cambio de selección"""
         self.update_layers_list()
         self.update_transform_info()
+        
+        # Actualizar slider de opacidad
+        selected = self.scene.selectedItems()
+        if selected and isinstance(selected[0], (ImageItem, ShapeItem, TextItem)):
+            item = selected[0]
+            opacity_value = int(item.opacity() * 100)
+            self.opacity_slider.setValue(opacity_value)
+            self.opacity_label.setText(f"{opacity_value}%")
+        else:
+            self.opacity_slider.setValue(100)
+            self.opacity_label.setText("100%")
     
     def update_transform_info(self):
         """Actualizar info de transformación"""
@@ -2242,6 +2331,108 @@ class CanvasEditor(QMainWindow):
         
         self.statusBar().showMessage("➡️ Objetos centrados", 2000)
     
+    def align_right(self):
+        """Alinear objetos a la derecha"""
+        selected = [item for item in self.scene.selectedItems() 
+                   if isinstance(item, (ImageItem, ShapeItem, TextItem))]
+        
+        if len(selected) < 2:
+            self.statusBar().showMessage("⚠️ Selecciona al menos 2 objetos", 2000)
+            return
+        
+        # Encontrar el más a la derecha
+        max_x = max(item.pos().x() + item.boundingRect().width() for item in selected)
+        
+        # Alinear todos a esa posición
+        for item in selected:
+            item.setX(max_x - item.boundingRect().width())
+        
+        self.statusBar().showMessage("➡️ Objetos alineados a la derecha", 2000)
+    
+    def align_top(self):
+        """Alinear objetos arriba"""
+        selected = [item for item in self.scene.selectedItems() 
+                   if isinstance(item, (ImageItem, ShapeItem, TextItem))]
+        
+        if len(selected) < 2:
+            self.statusBar().showMessage("⚠️ Selecciona al menos 2 objetos", 2000)
+            return
+        
+        # Encontrar el más arriba
+        min_y = min(item.pos().y() for item in selected)
+        
+        # Alinear todos a esa posición
+        for item in selected:
+            item.setY(min_y)
+        
+        self.statusBar().showMessage("⬆️ Objetos alineados arriba", 2000)
+    
+    def align_bottom(self):
+        """Alinear objetos abajo"""
+        selected = [item for item in self.scene.selectedItems() 
+                   if isinstance(item, (ImageItem, ShapeItem, TextItem))]
+        
+        if len(selected) < 2:
+            self.statusBar().showMessage("⚠️ Selecciona al menos 2 objetos", 2000)
+            return
+        
+        # Encontrar el más abajo
+        max_y = max(item.pos().y() + item.boundingRect().height() for item in selected)
+        
+        # Alinear todos a esa posición
+        for item in selected:
+            item.setY(max_y - item.boundingRect().height())
+        
+        self.statusBar().showMessage("⬇️ Objetos alineados abajo", 2000)
+    
+    def distribute_horizontal(self):
+        """Distribuir objetos horizontalmente"""
+        selected = [item for item in self.scene.selectedItems() 
+                   if isinstance(item, (ImageItem, ShapeItem, TextItem))]
+        
+        if len(selected) < 3:
+            self.statusBar().showMessage("⚠️ Selecciona al menos 3 objetos", 2000)
+            return
+        
+        # Ordenar por posición X
+        selected.sort(key=lambda item: item.pos().x())
+        
+        # Calcular espaciado
+        first = selected[0]
+        last = selected[-1]
+        total_width = last.pos().x() - first.pos().x()
+        space = total_width / (len(selected) - 1)
+        
+        # Distribuir
+        for i, item in enumerate(selected[1:-1], 1):
+            item.setX(first.pos().x() + space * i)
+        
+        self.statusBar().showMessage("↔️ Objetos distribuidos horizontalmente", 2000)
+    
+    def distribute_vertical(self):
+        """Distribuir objetos verticalmente"""
+        selected = [item for item in self.scene.selectedItems() 
+                   if isinstance(item, (ImageItem, ShapeItem, TextItem))]
+        
+        if len(selected) < 3:
+            self.statusBar().showMessage("⚠️ Selecciona al menos 3 objetos", 2000)
+            return
+        
+        # Ordenar por posición Y
+        selected.sort(key=lambda item: item.pos().y())
+        
+        # Calcular espaciado
+        first = selected[0]
+        last = selected[-1]
+        total_height = last.pos().y() - first.pos().y()
+        space = total_height / (len(selected) - 1)
+        
+        # Distribuir
+        for i, item in enumerate(selected[1:-1], 1):
+            item.setY(first.pos().y() + space * i)
+        
+        self.statusBar().showMessage("↕️ Objetos distribuidos verticalmente", 2000)
+    
     def toggle_theme(self):
         """Cambiar tema oscuro/claro"""
         theme = self.theme.toggle()
@@ -2251,7 +2442,14 @@ class CanvasEditor(QMainWindow):
     def toggle_grid(self):
         """Mostrar/ocultar grid"""
         self.show_grid = not self.show_grid
-        self.scene.update()
+        # Recrear canvas para aplicar cambios
+        selected_items = [item for item in self.scene.selectedItems() 
+                         if isinstance(item, (ImageItem, ShapeItem, TextItem))]
+        self.create_canvas()
+        # Restaurar items seleccionados
+        for item in selected_items:
+            if item.scene() == self.scene:
+                item.setSelected(True)
         state = "visible" if self.show_grid else "oculto"
         self.statusBar().showMessage(f"📐 Grid {state}", 2000)
     
@@ -2288,6 +2486,24 @@ class CanvasEditor(QMainWindow):
                 self.statusBar().showMessage(f"🖊️ Color de borde cambiado", 2000)
         else:
             self.statusBar().showMessage("⚠️ Selecciona una forma", 2000)
+    
+    def change_opacity(self, value):
+        """Cambiar opacidad del objeto seleccionado"""
+        selected = self.scene.selectedItems()
+        
+        if not selected:
+            return
+        
+        item = selected[0]
+        
+        if isinstance(item, (ImageItem, ShapeItem, TextItem)):
+            opacity = value / 100.0
+            item.setOpacity(opacity)
+            self.opacity_label.setText(f"{value}%")
+            
+            # Actualizar transform data si existe
+            if hasattr(item, 'transform_data'):
+                item.transform_data.opacity = opacity
     
     def apply_filter(self, filter_name: str):
         """Aplicar filtro a imagen seleccionada"""
@@ -2415,6 +2631,215 @@ class CanvasEditor(QMainWindow):
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error:\n{str(e)}")
+    
+    def save_project(self):
+        """Guardar proyecto completo"""
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Guardar Proyecto",
+            "",
+            "Canvas Project (*.canvasproj)"
+        )
+        
+        if not file_path:
+            return
+        
+        if not file_path.endswith('.canvasproj'):
+            file_path += '.canvasproj'
+        
+        try:
+            # Serializar datos del proyecto
+            project_data = {
+                'version': '4.0',
+                'canvas': {
+                    'width_cm': self.canvas_width_cm,
+                    'height_cm': self.canvas_height_cm,
+                    'dpi': self.canvas_dpi
+                },
+                'objects': []
+            }
+            
+            # Guardar cada objeto
+            for item in self.scene.items():
+                if isinstance(item, ImageItem):
+                    obj_data = {
+                        'type': 'image',
+                        'path': item.image_path,
+                        'x': item.pos().x(),
+                        'y': item.pos().y(),
+                        'width': item.transform_data.width,
+                        'height': item.transform_data.height,
+                        'rotation': item.rotation(),
+                        'opacity': item.opacity(),
+                        'z_value': item.zValue()
+                    }
+                    project_data['objects'].append(obj_data)
+                
+                elif isinstance(item, ShapeItem):
+                    obj_data = {
+                        'type': 'shape',
+                        'shape_type': item.shape_type.value,
+                        'x': item.pos().x(),
+                        'y': item.pos().y(),
+                        'rect': {
+                            'x': item.shape_rect.x(),
+                            'y': item.shape_rect.y(),
+                            'width': item.shape_rect.width(),
+                            'height': item.shape_rect.height()
+                        },
+                        'fill_color': item.fill_color.name(),
+                        'stroke_color': item.stroke_color.name(),
+                        'stroke_width': item.stroke_width,
+                        'rotation': item.rotation(),
+                        'opacity': item.opacity(),
+                        'z_value': item.zValue()
+                    }
+                    project_data['objects'].append(obj_data)
+                
+                elif isinstance(item, TextItem):
+                    obj_data = {
+                        'type': 'text',
+                        'text': item.toPlainText(),
+                        'x': item.pos().x(),
+                        'y': item.pos().y(),
+                        'font_family': item.font_family,
+                        'font_size': item.font_size,
+                        'color': item.text_color.name(),
+                        'rotation': item.rotation(),
+                        'opacity': item.opacity(),
+                        'z_value': item.zValue()
+                    }
+                    project_data['objects'].append(obj_data)
+            
+            # Guardar a archivo JSON
+            with open(file_path, 'w') as f:
+                json.dump(project_data, f, indent=2)
+            
+            self.statusBar().showMessage(f"✅ Proyecto guardado: {os.path.basename(file_path)}", 3000)
+            QMessageBox.information(self, "Éxito", f"Proyecto guardado en:\n{file_path}")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error al guardar:\n{str(e)}")
+    
+    def load_project(self):
+        """Cargar proyecto"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Abrir Proyecto",
+            "",
+            "Canvas Project (*.canvasproj)"
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            # Cargar datos del archivo
+            with open(file_path, 'r') as f:
+                project_data = json.load(f)
+            
+            # Limpiar escena actual
+            self.scene.clear()
+            
+            # Configurar canvas
+            canvas_data = project_data.get('canvas', {})
+            self.canvas_width_cm = canvas_data.get('width_cm', 21.0)
+            self.canvas_height_cm = canvas_data.get('height_cm', 29.7)
+            self.canvas_dpi = canvas_data.get('dpi', 96)
+            
+            self.create_canvas()
+            
+            # Cargar objetos
+            for obj_data in project_data.get('objects', []):
+                obj_type = obj_data.get('type')
+                
+                if obj_type == 'image':
+                    # Cargar imagen
+                    image_path = obj_data.get('path')
+                    if os.path.exists(image_path):
+                        pil_img = Image.open(image_path)
+                        if pil_img.mode == 'RGBA':
+                            qimg = ImageQt.ImageQt(pil_img)
+                            pixmap = QPixmap.fromImage(qimg)
+                        else:
+                            pil_img_rgb = pil_img.convert('RGB')
+                            data = pil_img_rgb.tobytes("raw", "RGB")
+                            qimg = QImage(
+                                data,
+                                pil_img_rgb.width,
+                                pil_img_rgb.height,
+                                QImage.Format.Format_RGB888
+                            )
+                            pixmap = QPixmap.fromImage(qimg)
+                        
+                        # Crear item
+                        item = ImageItem(pixmap, image_path, self)
+                        
+                        # Restaurar propiedades
+                        width = obj_data.get('width')
+                        height = obj_data.get('height')
+                        scaled_pixmap = item.original_pixmap.scaled(
+                            int(width), int(height),
+                            Qt.AspectRatioMode.IgnoreAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation
+                        )
+                        item.setPixmap(scaled_pixmap)
+                        item.setPos(obj_data.get('x'), obj_data.get('y'))
+                        item.setRotation(obj_data.get('rotation', 0))
+                        item.setOpacity(obj_data.get('opacity', 1.0))
+                        item.setZValue(obj_data.get('z_value', 0))
+                        
+                        self.scene.addItem(item)
+                
+                elif obj_type == 'shape':
+                    # Crear forma
+                    shape_type_str = obj_data.get('shape_type')
+                    shape_type_map = {
+                        'rectangle': ShapeType.RECTANGLE,
+                        'ellipse': ShapeType.ELLIPSE,
+                        'polygon': ShapeType.POLYGON,
+                        'star': ShapeType.STAR
+                    }
+                    shape_type = shape_type_map.get(shape_type_str, ShapeType.RECTANGLE)
+                    
+                    rect_data = obj_data.get('rect', {})
+                    rect = QRectF(
+                        rect_data.get('x', 0),
+                        rect_data.get('y', 0),
+                        rect_data.get('width', 100),
+                        rect_data.get('height', 100)
+                    )
+                    
+                    item = ShapeItem(shape_type, rect, self)
+                    item.set_fill_color(QColor(obj_data.get('fill_color', '#3498db')))
+                    item.set_stroke_color(QColor(obj_data.get('stroke_color', '#2c3e50')))
+                    item.set_stroke_width(obj_data.get('stroke_width', 2))
+                    item.setPos(obj_data.get('x'), obj_data.get('y'))
+                    item.setRotation(obj_data.get('rotation', 0))
+                    item.setOpacity(obj_data.get('opacity', 1.0))
+                    item.setZValue(obj_data.get('z_value', 0))
+                    
+                    self.scene.addItem(item)
+                
+                elif obj_type == 'text':
+                    # Crear texto
+                    item = TextItem(obj_data.get('text', ''), self)
+                    item.set_font_family(obj_data.get('font_family', 'Arial'))
+                    item.set_font_size(obj_data.get('font_size', 24))
+                    item.set_text_color(QColor(obj_data.get('color', '#000000')))
+                    item.setPos(obj_data.get('x'), obj_data.get('y'))
+                    item.setRotation(obj_data.get('rotation', 0))
+                    item.setOpacity(obj_data.get('opacity', 1.0))
+                    item.setZValue(obj_data.get('z_value', 0))
+                    
+                    self.scene.addItem(item)
+            
+            self.update_layers_list()
+            self.statusBar().showMessage(f"✅ Proyecto cargado: {os.path.basename(file_path)}", 3000)
+            QMessageBox.information(self, "Éxito", f"Proyecto cargado desde:\n{file_path}")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error al cargar:\n{str(e)}")
     
     def show_shortcuts(self):
         """Mostrar diálogo de atajos de teclado"""
