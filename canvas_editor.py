@@ -71,18 +71,24 @@ class DraggableImageItem(QGraphicsPixmapItem):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, not canvas_item.locked)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
+        self.setAcceptHoverEvents(True)  # Habilitar eventos hover para cambiar cursor
         self.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
         self.setOpacity(canvas_item.opacity)
         self.setZValue(canvas_item.z_index)
         
-        # Handles de redimensionamiento
-        self.resize_handle_size = 10
+        # Sistema profesional de handles estilo Canva
+        self.handle_size = 12  # Tamaño de handles (círculos)
+        self.rotation_handle_distance = 30  # Distancia del handle de rotación
         self.is_resizing = False
-        self.resize_corner = None
-        self.resize_side = None
+        self.is_rotating = False
+        self.resize_handle = None  # 'tl', 'tr', 'bl', 'br', 't', 'b', 'l', 'r'
         self.resize_start_pos = None
         self.resize_start_rect = None
         self.resize_start_pixmap = None
+        self.resize_from_center = False  # Alt presionado
+        self.maintain_aspect_ratio = False  # Shift presionado
+        self.rotation_start_angle = 0
+        self.rotation_start_pos = None
         
         # Rotación
         self.setTransformOriginPoint(self.boundingRect().center())
@@ -90,10 +96,18 @@ class DraggableImageItem(QGraphicsPixmapItem):
         
     def boundingRect(self):
         rect = super().boundingRect()
-        margin = self.resize_handle_size + 2
-        return rect.adjusted(-margin, -margin, margin, margin)
+        # Expandir para incluir handles y handle de rotación
+        margin = self.handle_size + 2
+        rotation_margin = self.rotation_handle_distance + self.handle_size + 5
+        return rect.adjusted(-margin, -(rotation_margin + margin), margin, margin)
     
     def paint(self, painter, option, widget):
+        """Dibujar imagen con controles personalizados profesionales (sin borde automático de Qt)"""
+        
+        # ===== SOLUCIÓN: Deshabilitar el borde de selección automático de Qt =====
+        # Esta línea elimina el marco exterior que Qt dibuja automáticamente
+        option.state &= ~QStyle.StateFlag.State_Selected
+        
         # Dibujar la imagen
         super().paint(painter, option, widget)
         
@@ -101,135 +115,231 @@ class DraggableImageItem(QGraphicsPixmapItem):
         if self.isSelected():
             rect = self.pixmap().rect()
             
-            # Borde de selección animado
-            pen = QPen(QColor(0, 120, 215), 2, Qt.PenStyle.DashLine)
+            # Guardar estado del painter
+            painter.save()
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            
+            # Color turquesa profesional estilo Canva
+            canva_color = QColor(0, 196, 204)  # #00c4cc
+            
+            # Borde de selección (línea sólida turquesa)
+            pen = QPen(canva_color, 2, Qt.PenStyle.SolidLine)
             painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(rect)
             
-            # Handles en las esquinas (para redimensionar proporcional)
-            handle_size = self.resize_handle_size
-            painter.setBrush(QBrush(QColor(0, 120, 215)))
-            painter.setPen(QPen(QColor(255, 255, 255), 1))
+            # Estilo de handles profesionales
+            handle_size = self.handle_size
             
+            # Configuración visual de handles
+            painter.setBrush(QBrush(QColor(255, 255, 255)))  # Relleno blanco
+            painter.setPen(QPen(canva_color, 2))  # Borde turquesa
+            
+            # Handles en las esquinas (círculos para redimensionar)
             corners = [
-                QRectF(rect.left() - handle_size/2, rect.top() - handle_size/2, handle_size, handle_size),  # TL
-                QRectF(rect.right() - handle_size/2, rect.top() - handle_size/2, handle_size, handle_size),  # TR
-                QRectF(rect.left() - handle_size/2, rect.bottom() - handle_size/2, handle_size, handle_size),  # BL
-                QRectF(rect.right() - handle_size/2, rect.bottom() - handle_size/2, handle_size, handle_size),  # BR
+                QPointF(rect.left(), rect.top()),      # TL
+                QPointF(rect.right(), rect.top()),     # TR
+                QPointF(rect.left(), rect.bottom()),   # BL
+                QPointF(rect.right(), rect.bottom()),  # BR
             ]
             
             for corner in corners:
-                painter.drawEllipse(corner)
+                painter.drawEllipse(corner, handle_size/2, handle_size/2)
             
-            # Handles en los lados (para deformar)
+            # Handles en los lados (círculos para redimensionar en una dirección)
             sides = [
-                QRectF((rect.left() + rect.right())/2 - handle_size/2, rect.top() - handle_size/2, handle_size, handle_size),  # T
-                QRectF((rect.left() + rect.right())/2 - handle_size/2, rect.bottom() - handle_size/2, handle_size, handle_size),  # B
-                QRectF(rect.left() - handle_size/2, (rect.top() + rect.bottom())/2 - handle_size/2, handle_size, handle_size),  # L
-                QRectF(rect.right() - handle_size/2, (rect.top() + rect.bottom())/2 - handle_size/2, handle_size, handle_size),  # R
+                QPointF((rect.left() + rect.right())/2, rect.top()),      # T
+                QPointF((rect.left() + rect.right())/2, rect.bottom()),   # B
+                QPointF(rect.left(), (rect.top() + rect.bottom())/2),     # L
+                QPointF(rect.right(), (rect.top() + rect.bottom())/2),    # R
             ]
             
-            painter.setBrush(QBrush(QColor(255, 165, 0)))
             for side in sides:
-                painter.drawRect(side)
+                painter.drawEllipse(side, handle_size/2, handle_size/2)
+            
+            # Handle de rotación (arriba, centro, con línea de conexión)
+            rotation_handle_y = rect.top() - self.rotation_handle_distance
+            rotation_handle_center = QPointF((rect.left() + rect.right())/2, rotation_handle_y)
+            
+            # Línea de conexión punteada
+            painter.setPen(QPen(canva_color, 1, Qt.PenStyle.DashLine))
+            painter.drawLine(
+                QPointF((rect.left() + rect.right())/2, rect.top()),
+                rotation_handle_center
+            )
+            
+            # Handle de rotación (círculo con ícono)
+            painter.setPen(QPen(canva_color, 2))
+            painter.setBrush(QBrush(QColor(255, 255, 255)))
+            painter.drawEllipse(rotation_handle_center, handle_size/2, handle_size/2)
+            
+            # Dibujar ícono de rotación en el handle
+            painter.setPen(QPen(canva_color, 1.5))
+            arc_rect = QRectF(
+                rotation_handle_center.x() - 4,
+                rotation_handle_center.y() - 4,
+                8, 8
+            )
+            painter.drawArc(arc_rect, 45 * 16, 270 * 16)  # Arco circular
+            
+            painter.restore()
     
     def get_handle_at_pos(self, pos):
-        """Determinar qué handle se clickeó"""
+        """Determinar qué handle se clickeó (profesional estilo Canva)"""
         rect = self.pixmap().rect()
-        handle_size = self.resize_handle_size
+        handle_size = self.handle_size
+        threshold = handle_size  # Área de detección del handle
         
-        # Esquinas (redimensionar proporcional)
+        # Handle de rotación (prioridad máxima)
+        rotation_handle_y = rect.top() - self.rotation_handle_distance
+        rotation_center = QPointF((rect.left() + rect.right())/2, rotation_handle_y)
+        if (pos - rotation_center).manhattanLength() < threshold:
+            return 'rotation'
+        
+        # Handles de esquinas (para redimensionar)
         corners = {
-            'tl': QRectF(rect.left() - handle_size/2, rect.top() - handle_size/2, handle_size, handle_size),
-            'tr': QRectF(rect.right() - handle_size/2, rect.top() - handle_size/2, handle_size, handle_size),
-            'bl': QRectF(rect.left() - handle_size/2, rect.bottom() - handle_size/2, handle_size, handle_size),
-            'br': QRectF(rect.right() - handle_size/2, rect.bottom() - handle_size/2, handle_size, handle_size),
+            'tl': QPointF(rect.left(), rect.top()),
+            'tr': QPointF(rect.right(), rect.top()),
+            'bl': QPointF(rect.left(), rect.bottom()),
+            'br': QPointF(rect.right(), rect.bottom()),
         }
         
-        for corner, handle_rect in corners.items():
-            if handle_rect.contains(pos):
-                return ('corner', corner)
+        for corner_name, corner_pos in corners.items():
+            if (pos - corner_pos).manhattanLength() < threshold:
+                return corner_name
         
-        # Lados (deformar)
+        # Handles de lados (para redimensionar en una dirección)
         sides = {
-            't': QRectF((rect.left() + rect.right())/2 - handle_size/2, rect.top() - handle_size/2, handle_size, handle_size),
-            'b': QRectF((rect.left() + rect.right())/2 - handle_size/2, rect.bottom() - handle_size/2, handle_size, handle_size),
-            'l': QRectF(rect.left() - handle_size/2, (rect.top() + rect.bottom())/2 - handle_size/2, handle_size, handle_size),
-            'r': QRectF(rect.right() - handle_size/2, (rect.top() + rect.bottom())/2 - handle_size/2, handle_size, handle_size),
+            't': QPointF((rect.left() + rect.right())/2, rect.top()),
+            'b': QPointF((rect.left() + rect.right())/2, rect.bottom()),
+            'l': QPointF(rect.left(), (rect.top() + rect.bottom())/2),
+            'r': QPointF(rect.right(), (rect.top() + rect.bottom())/2),
         }
         
-        for side, handle_rect in sides.items():
-            if handle_rect.contains(pos):
-                return ('side', side)
+        for side_name, side_pos in sides.items():
+            if (pos - side_pos).manhattanLength() < threshold:
+                return side_name
         
-        return (None, None)
+        return None
     
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and not self.canvas_item.locked:
             pos = event.pos()
-            handle_type, handle_pos = self.get_handle_at_pos(pos)
+            handle = self.get_handle_at_pos(pos)
             
-            if handle_type:
+            if handle == 'rotation':
+                # Iniciar rotación
+                self.is_rotating = True
+                self.rotation_start_pos = event.scenePos()
+                center = self.sceneBoundingRect().center()
+                # Calcular ángulo inicial
+                delta = self.rotation_start_pos - center
+                import math
+                self.rotation_start_angle = math.atan2(delta.y(), delta.x()) - math.radians(self.rotation())
+                event.accept()
+                return
+            elif handle:
+                # Iniciar redimensionamiento
                 self.is_resizing = True
-                self.resize_corner = handle_pos if handle_type == 'corner' else None
-                self.resize_side = handle_pos if handle_type == 'side' else None
+                self.resize_handle = handle
                 self.resize_start_pos = event.scenePos()
-                self.resize_start_rect = self.boundingRect()
+                self.resize_start_rect = self.pixmap().rect()
                 self.resize_start_pixmap = self.pixmap()
+                self.resize_from_center = bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
+                self.maintain_aspect_ratio = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
                 event.accept()
                 return
         
         super().mousePressEvent(event)
     
     def mouseMoveEvent(self, event):
-        if self.is_resizing:
+        import math
+        
+        if self.is_rotating:
+            # Rotación del objeto
+            center = self.sceneBoundingRect().center()
+            current_pos = event.scenePos()
+            delta = current_pos - center
+            current_angle = math.atan2(delta.y(), delta.x())
+            angle_degrees = math.degrees(current_angle - self.rotation_start_angle)
+            
+            # Snap a 15° con Shift presionado
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                angle_degrees = round(angle_degrees / 15) * 15
+            
+            # Snap a 0°, 90°, 180°, 270° cuando está cerca (±5°)
+            snap_angles = [0, 90, 180, 270, 360]
+            for snap_angle in snap_angles:
+                if abs(angle_degrees - snap_angle) < 5:
+                    angle_degrees = snap_angle
+                    break
+                if abs(angle_degrees + 360 - snap_angle) < 5:
+                    angle_degrees = snap_angle
+                    break
+            
+            self.setRotation(angle_degrees)
+            
+            # TODO: Mostrar tooltip con ángulo actual
+            event.accept()
+            
+        elif self.is_resizing:
+            # Redimensionamiento del objeto
             delta = event.scenePos() - self.resize_start_pos
             current_pixmap = self.resize_start_pixmap
+            rect = self.resize_start_rect
             
-            if self.resize_corner:
-                # Redimensionar desde esquina (proporcional o no)
-                new_width = max(20, current_pixmap.width())
-                new_height = max(20, current_pixmap.height())
+            # Actualizar flags según teclas modificadoras
+            self.resize_from_center = bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
+            self.maintain_aspect_ratio = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            
+            # Calcular nuevo tamaño según el handle
+            new_width = rect.width()
+            new_height = rect.height()
+            
+            if self.resize_handle in ['tl', 'tr', 'bl', 'br']:
+                # Handles de esquina
+                if self.resize_handle == 'br':
+                    new_width = max(10, rect.width() + delta.x())
+                    new_height = max(10, rect.height() + delta.y())
+                elif self.resize_handle == 'bl':
+                    new_width = max(10, rect.width() - delta.x())
+                    new_height = max(10, rect.height() + delta.y())
+                elif self.resize_handle == 'tr':
+                    new_width = max(10, rect.width() + delta.x())
+                    new_height = max(10, rect.height() - delta.y())
+                elif self.resize_handle == 'tl':
+                    new_width = max(10, rect.width() - delta.x())
+                    new_height = max(10, rect.height() - delta.y())
                 
-                if self.resize_corner == 'br':
-                    new_width = max(20, current_pixmap.width() + delta.x())
-                    new_height = max(20, current_pixmap.height() + delta.y())
-                elif self.resize_corner == 'bl':
-                    new_width = max(20, current_pixmap.width() - delta.x())
-                    new_height = max(20, current_pixmap.height() + delta.y())
-                elif self.resize_corner == 'tr':
-                    new_width = max(20, current_pixmap.width() + delta.x())
-                    new_height = max(20, current_pixmap.height() - delta.y())
-                elif self.resize_corner == 'tl':
-                    new_width = max(20, current_pixmap.width() - delta.x())
-                    new_height = max(20, current_pixmap.height() - delta.y())
-                
-                # Mantener proporción con Shift
-                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                    aspect_ratio = current_pixmap.width() / current_pixmap.height()
+                # Mantener proporción si Shift está presionado
+                if self.maintain_aspect_ratio:
+                    aspect_ratio = rect.width() / rect.height()
                     new_height = new_width / aspect_ratio
-                
+                    
+            elif self.resize_handle in ['t', 'b', 'l', 'r']:
+                # Handles de lados
+                if self.resize_handle == 'r':
+                    new_width = max(10, rect.width() + delta.x())
+                elif self.resize_handle == 'l':
+                    new_width = max(10, rect.width() - delta.x())
+                elif self.resize_handle == 'b':
+                    new_height = max(10, rect.height() + delta.y())
+                elif self.resize_handle == 't':
+                    new_height = max(10, rect.height() - delta.y())
+            
+            # Redimensionar desde el centro si Alt está presionado
+            if self.resize_from_center:
+                # Calcular el offset para redimensionar desde el centro
+                old_center = self.pos() + QPointF(rect.width()/2, rect.height()/2)
                 scaled_pixmap = current_pixmap.scaled(
                     int(new_width), int(new_height),
                     Qt.AspectRatioMode.IgnoreAspectRatio,
                     Qt.TransformationMode.SmoothTransformation
                 )
                 self.setPixmap(scaled_pixmap)
-                
-            elif self.resize_side:
-                # Deformar desde lado
-                new_width = current_pixmap.width()
-                new_height = current_pixmap.height()
-                
-                if self.resize_side == 'r':
-                    new_width = max(20, current_pixmap.width() + delta.x())
-                elif self.resize_side == 'l':
-                    new_width = max(20, current_pixmap.width() - delta.x())
-                elif self.resize_side == 'b':
-                    new_height = max(20, current_pixmap.height() + delta.y())
-                elif self.resize_side == 't':
-                    new_height = max(20, current_pixmap.height() - delta.y())
-                
+                new_center_offset = QPointF(new_width/2, new_height/2)
+                self.setPos(old_center - new_center_offset)
+            else:
                 scaled_pixmap = current_pixmap.scaled(
                     int(new_width), int(new_height),
                     Qt.AspectRatioMode.IgnoreAspectRatio,
@@ -237,22 +347,63 @@ class DraggableImageItem(QGraphicsPixmapItem):
                 )
                 self.setPixmap(scaled_pixmap)
             
+            # TODO: Mostrar tooltip con dimensiones actuales
             event.accept()
         else:
             super().mouseMoveEvent(event)
     
     def mouseReleaseEvent(self, event):
-        if self.is_resizing:
+        if self.is_rotating:
+            # Finalizar rotación
+            self.is_rotating = False
+            self.canvas_item.rotation = self.rotation()
+            self.canvas_editor.update_properties_from_selection()
+            self.canvas_editor.save_history_state()
+            event.accept()
+        elif self.is_resizing:
+            # Finalizar redimensionamiento
             self.is_resizing = False
             # Actualizar canvas_item con nuevo tamaño
             dpi = self.canvas_editor.canvas_dpi
             self.canvas_item.width = pixels_to_cm(self.pixmap().width(), dpi)
             self.canvas_item.height = pixels_to_cm(self.pixmap().height(), dpi)
+            # Actualizar posición si se redimensionó desde el centro
+            pos = self.pos()
+            self.canvas_item.x = pixels_to_cm(pos.x(), dpi)
+            self.canvas_item.y = pixels_to_cm(pos.y(), dpi)
             self.canvas_editor.update_properties_from_selection()
             self.canvas_editor.save_history_state()
             event.accept()
         else:
             super().mouseReleaseEvent(event)
+    
+    def hoverMoveEvent(self, event):
+        """Cambiar cursor según el handle sobre el que se encuentre"""
+        if self.canvas_item.locked:
+            return super().hoverMoveEvent(event)
+        
+        handle = self.get_handle_at_pos(event.pos())
+        
+        if handle == 'rotation':
+            # Cursor de rotación
+            self.setCursor(Qt.CursorShape.CrossCursor)
+        elif handle in ['tl', 'br']:
+            # Diagonal noroeste-sureste
+            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        elif handle in ['tr', 'bl']:
+            # Diagonal noreste-suroeste
+            self.setCursor(Qt.CursorShape.SizeBDiagCursor)
+        elif handle in ['t', 'b']:
+            # Vertical
+            self.setCursor(Qt.CursorShape.SizeVerCursor)
+        elif handle in ['l', 'r']:
+            # Horizontal
+            self.setCursor(Qt.CursorShape.SizeHorCursor)
+        else:
+            # Cursor normal
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+        
+        super().hoverMoveEvent(event)
     
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
