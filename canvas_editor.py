@@ -30,6 +30,68 @@ def pixels_to_cm(pixels: float, dpi: int = 96) -> float:
     inches = pixels / dpi
     return inches * 2.54
 
+# ==================== Gestor de Archivos Temporales ====================
+
+class TempFileManager:
+    """
+    Gestor centralizado de archivos temporales con Singleton pattern
+    
+    Características:
+    - Registro de todos los archivos temporales creados
+    - Limpieza automática al destruir
+    - Limpieza de archivos antiguos
+    - Context manager support
+    """
+    _instance = None
+    
+    @classmethod
+    def get_instance(cls):
+        """Obtener instancia única (Singleton)"""
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+    
+    def __init__(self):
+        """Inicializar gestor de archivos temporales"""
+        if TempFileManager._instance is not None:
+            raise RuntimeError("Use TempFileManager.get_instance() en lugar del constructor")
+        self.temp_files: Set[str] = set()
+    
+    def register_temp_file(self, path: str):
+        """Registrar archivo temporal para limpieza posterior"""
+        if os.path.exists(path):
+            self.temp_files.add(path)
+    
+    def cleanup(self):
+        """Eliminar todos los archivos temporales registrados"""
+        for file_path in list(self.temp_files):
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                self.temp_files.discard(file_path)
+            except Exception as e:
+                print(f"Error eliminando archivo temporal {file_path}: {e}")
+    
+    def cleanup_old_files(self, max_age_hours: int = 24):
+        """Eliminar archivos temporales más antiguos que max_age_hours"""
+        import time
+        current_time = time.time()
+        max_age_seconds = max_age_hours * 3600
+        
+        for file_path in list(self.temp_files):
+            try:
+                if os.path.exists(file_path):
+                    file_age = current_time - os.path.getmtime(file_path)
+                    if file_age > max_age_seconds:
+                        os.remove(file_path)
+                        self.temp_files.discard(file_path)
+            except Exception as e:
+                print(f"Error limpiando archivo antiguo {file_path}: {e}")
+    
+    def __del__(self):
+        """Limpieza automática al destruir el gestor"""
+        self.cleanup()
+
 # ==================== Clases de Datos ====================
 
 @dataclass
@@ -653,6 +715,41 @@ class LayersListWidget(QListWidget):
         """Emitir señal cuando se reordenan las capas"""
         self.layerOrderChanged.emit()
 
+# ==================== Custom Graphics View ====================
+
+class CustomGraphicsView(QGraphicsView):
+    """Vista personalizada con zoom mejorado mediante Ctrl+Scroll"""
+    
+    def __init__(self, scene, canvas_editor, parent=None):
+        super().__init__(scene, parent)
+        self.canvas_editor = canvas_editor
+    
+    def wheelEvent(self, event):
+        """Zoom con rueda del mouse (Ctrl + Scroll)"""
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            # Zoom hacia la posición del cursor
+            delta = event.angleDelta().y()
+            zoom_factor = 1.15 if delta > 0 else 1/1.15
+            
+            # Guardar posición del mouse en la escena
+            old_pos = self.mapToScene(event.position().toPoint())
+            
+            # Aplicar zoom
+            self.scale(zoom_factor, zoom_factor)
+            
+            # Ajustar para mantener punto bajo cursor
+            new_pos = self.mapToScene(event.position().toPoint())
+            delta_pos = new_pos - old_pos
+            self.translate(delta_pos.x(), delta_pos.y())
+            
+            # Actualizar label de zoom en editor
+            if hasattr(self.canvas_editor, 'update_zoom_display'):
+                self.canvas_editor.update_zoom_display()
+            
+            event.accept()
+        else:
+            super().wheelEvent(event)
+
 # ==================== Canvas Principal ====================
 
 class CanvasEditor(QMainWindow):
@@ -908,9 +1005,9 @@ class CanvasEditor(QMainWindow):
         toolbar.addWidget(undo_btn)
         toolbar.addWidget(redo_btn)
         
-        # Graphics View para el canvas
+        # Graphics View para el canvas (usando vista personalizada)
         self.scene = QGraphicsScene()
-        self.view = QGraphicsView(self.scene)
+        self.view = CustomGraphicsView(self.scene, self)
         self.view.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.view.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         self.view.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
@@ -1537,14 +1634,17 @@ class CanvasEditor(QMainWindow):
         if not selected:
             return
         
+        temp_manager = TempFileManager.get_instance()
+        
         for item in selected:
             try:
                 pil_img = Image.open(item.canvas_item.image_path)
                 pil_img = pil_img.transpose(Image.FLIP_LEFT_RIGHT)
                 
-                # Guardar temporalmente
+                # Guardar temporalmente y registrar en el gestor
                 temp_path = os.path.join(tempfile.gettempdir(), f"flipped_{uuid.uuid4()}.png")
                 pil_img.save(temp_path)
+                temp_manager.register_temp_file(temp_path)
                 item.canvas_item.image_path = temp_path
                 
                 # Actualizar pixmap
@@ -1585,9 +1685,11 @@ class CanvasEditor(QMainWindow):
                 pil_img = Image.open(item.canvas_item.image_path)
                 pil_img = pil_img.transpose(Image.FLIP_TOP_BOTTOM)
                 
-                # Guardar temporalmente
+                # Guardar temporalmente y registrar en el gestor
+                temp_manager = TempFileManager.get_instance()
                 temp_path = os.path.join(tempfile.gettempdir(), f"flipped_{uuid.uuid4()}.png")
                 pil_img.save(temp_path)
+                temp_manager.register_temp_file(temp_path)
                 item.canvas_item.image_path = temp_path
                 
                 # Actualizar pixmap
@@ -2287,7 +2389,7 @@ class CanvasEditor(QMainWindow):
     
     def toggle_grid(self, state):
         """Mostrar/ocultar cuadrícula"""
-        self.show_grid = state == Qt.CheckState.Checked.value
+        self.show_grid = state == Qt.CheckState.Checked
         self.create_canvas()
         
         # Re-agregar todas las imágenes
@@ -2456,15 +2558,6 @@ class CanvasEditor(QMainWindow):
         else:
             image.save(output_path, format_name)
     
-    def wheelEvent(self, event):
-        """Zoom con rueda del mouse (Ctrl + Scroll)"""
-        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            delta = event.angleDelta().y()
-            zoom_delta = 0.1 if delta > 0 else -0.1
-            self.change_zoom(zoom_delta)
-            event.accept()
-        else:
-            super().wheelEvent(event)
     
     def closeEvent(self, event):
         """Guardar configuración al cerrar"""
