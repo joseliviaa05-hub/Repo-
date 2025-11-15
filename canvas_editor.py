@@ -624,11 +624,6 @@ class CanvasEditor(QMainWindow):
         config_group = QGroupBox("📄 Configuración del Canvas")
         config_layout = QFormLayout()
         
-    def _create_canvas_config_group(self):
-        """Create canvas configuration group"""
-        config_group = QGroupBox("📄 Configuración del Canvas")
-        config_layout = QFormLayout()
-        
         self.size_combo = QComboBox()
         self.size_combo.addItems([
             "A4 (21 x 29.7 cm)",
