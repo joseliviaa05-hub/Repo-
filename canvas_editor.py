@@ -468,6 +468,19 @@ class DraggableImageItem(QGraphicsPixmapItem):
         super().hoverMoveEvent(event)
     
     def itemChange(self, change, value):
+        # Snap to grid cuando se está moviendo el objeto
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
+            if hasattr(self.canvas_editor, 'snap_to_grid') and self.canvas_editor.snap_to_grid:
+                # Snap a la cuadrícula
+                grid_size_cm = 1.0  # 1 cm de cuadrícula por defecto
+                grid_size_px = cm_to_pixels(grid_size_cm, self.canvas_editor.canvas_dpi)
+                
+                new_pos = value  # QPointF
+                snapped_x = round(new_pos.x() / grid_size_px) * grid_size_px
+                snapped_y = round(new_pos.y() / grid_size_px) * grid_size_px
+                
+                return QPointF(snapped_x, snapped_y)
+        
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
             # Actualizar posición en canvas_item
             if hasattr(self, 'canvas_item') and hasattr(self.canvas_editor, 'canvas_dpi'):
@@ -786,6 +799,7 @@ class CanvasEditor(QMainWindow):
         
         # Clipboard
         self.clipboard_items: List[CanvasImageItem] = []
+        self.clipboard_center: Tuple[float, float] = (0.0, 0.0)
         
         self.setWindowTitle("🎨 Canvas Editor Profesional")
         self.resize(1600, 900)
@@ -1464,7 +1478,24 @@ class CanvasEditor(QMainWindow):
         """Actualizar panel de propiedades desde selección"""
         selected = [item for item in self.scene.selectedItems() if isinstance(item, DraggableImageItem)]
         
+        if len(selected) == 0:
+            # Deshabilitar panel si no hay selección
+            self.prop_x.setEnabled(False)
+            self.prop_y.setEnabled(False)
+            self.prop_width.setEnabled(False)
+            self.prop_height.setEnabled(False)
+            self.prop_rotation.setEnabled(False)
+            self.prop_opacity.setEnabled(False)
+            return
+        
+        # Habilitar controles
+        self.prop_x.setEnabled(True)
+        self.prop_y.setEnabled(True)
+        self.prop_rotation.setEnabled(True)
+        self.prop_opacity.setEnabled(True)
+        
         if len(selected) == 1:
+            # Un solo objeto seleccionado
             canvas_item = selected[0].canvas_item
             
             self.prop_x.blockSignals(True)
@@ -1481,6 +1512,54 @@ class CanvasEditor(QMainWindow):
             self.prop_rotation.setValue(int(canvas_item.rotation))
             self.prop_opacity.setValue(int(canvas_item.opacity * 100))
             self.opacity_label.setText(f"{int(canvas_item.opacity * 100)}%")
+            
+            # Habilitar width y height
+            self.prop_width.setEnabled(True)
+            self.prop_height.setEnabled(True)
+            
+            self.prop_x.blockSignals(False)
+            self.prop_y.blockSignals(False)
+            self.prop_width.blockSignals(False)
+            self.prop_height.blockSignals(False)
+            self.prop_rotation.blockSignals(False)
+            self.prop_opacity.blockSignals(False)
+        
+        else:
+            # Múltiple selección
+            self.prop_x.blockSignals(True)
+            self.prop_y.blockSignals(True)
+            self.prop_width.blockSignals(True)
+            self.prop_height.blockSignals(True)
+            self.prop_rotation.blockSignals(True)
+            self.prop_opacity.blockSignals(True)
+            
+            # Calcular promedios
+            avg_x = sum(item.canvas_item.x for item in selected) / len(selected)
+            avg_y = sum(item.canvas_item.y for item in selected) / len(selected)
+            avg_opacity = sum(item.canvas_item.opacity for item in selected) / len(selected)
+            
+            self.prop_x.setValue(avg_x)
+            self.prop_y.setValue(avg_y)
+            self.prop_opacity.setValue(int(avg_opacity * 100))
+            self.opacity_label.setText(f"{int(avg_opacity * 100)}%")
+            
+            # Verificar si todas tienen la misma rotación
+            rotations = [item.canvas_item.rotation for item in selected]
+            if all(abs(r - rotations[0]) < 0.1 for r in rotations):
+                # Todas tienen la misma rotación
+                self.prop_rotation.setValue(int(rotations[0]))
+                self.prop_rotation.setSpecialValueText("")
+            else:
+                # Rotaciones diferentes
+                self.prop_rotation.setValue(0)
+                self.prop_rotation.setSpecialValueText("Múltiple")
+            
+            # Deshabilitar width/height para múltiple selección
+            # (diferentes tamaños, no tiene sentido mostrar promedio)
+            self.prop_width.setEnabled(False)
+            self.prop_height.setEnabled(False)
+            self.prop_width.setValue(0)
+            self.prop_height.setValue(0)
             
             self.prop_x.blockSignals(False)
             self.prop_y.blockSignals(False)
@@ -1850,19 +1929,27 @@ class CanvasEditor(QMainWindow):
         self.statusBar().showMessage("Deseleccionado", 2000)
     
     def copy_selected(self):
-        """Copiar imágenes seleccionadas al clipboard"""
+        """Copiar imágenes seleccionadas al clipboard preservando posiciones relativas"""
         selected = [item for item in self.scene.selectedItems() if isinstance(item, DraggableImageItem)]
         
         if not selected:
             return
         
+        # Calcular centroide de la selección
+        center_x = sum(item.canvas_item.x for item in selected) / len(selected)
+        center_y = sum(item.canvas_item.y for item in selected) / len(selected)
+        
         self.clipboard_items = []
         for item in selected:
-            # Copiar canvas_item
+            # Guardar posición RELATIVA al centro
+            offset_x = item.canvas_item.x - center_x
+            offset_y = item.canvas_item.y - center_y
+            
+            # Copiar canvas_item con posiciones relativas
             copied = CanvasImageItem(
                 image_path=item.canvas_item.image_path,
-                x=item.canvas_item.x,
-                y=item.canvas_item.y,
+                x=offset_x,  # RELATIVO al centro
+                y=offset_y,  # RELATIVO al centro
                 width=item.canvas_item.width,
                 height=item.canvas_item.height,
                 rotation=item.canvas_item.rotation,
@@ -1872,19 +1959,29 @@ class CanvasEditor(QMainWindow):
             )
             self.clipboard_items.append(copied)
         
+        # Guardar el centroide para paste
+        self.clipboard_center = (center_x, center_y)
         self.statusBar().showMessage(f"{len(selected)} imagen(es) copiada(s)", 2000)
     
     def paste_from_clipboard(self):
-        """Pegar imágenes desde clipboard"""
+        """Pegar imágenes desde clipboard preservando layout relativo"""
         if not self.clipboard_items:
             return
         
+        # Calcular nueva posición del centro (offset +2cm del centro original)
+        paste_center_x = self.clipboard_center[0] + 2.0
+        paste_center_y = self.clipboard_center[1] + 2.0
+        
         for canvas_item in self.clipboard_items:
-            # Crear nueva instancia con offset
+            # Calcular posición absoluta desde la relativa
+            new_x = paste_center_x + canvas_item.x  # x es relativo al centro
+            new_y = paste_center_y + canvas_item.y  # y es relativo al centro
+            
+            # Crear nueva instancia
             new_item = CanvasImageItem(
                 image_path=canvas_item.image_path,
-                x=canvas_item.x + 1.0,
-                y=canvas_item.y + 1.0,
+                x=new_x,
+                y=new_y,
                 width=canvas_item.width,
                 height=canvas_item.height,
                 rotation=canvas_item.rotation,
@@ -1986,7 +2083,9 @@ class CanvasEditor(QMainWindow):
             self.statusBar().showMessage("Rehacer", 2000)
     
     def restore_state(self, state_json: str):
-        """Restaurar estado desde JSON"""
+        """Restaurar estado desde JSON con manejo robusto de errores"""
+        failed_images = []
+        
         try:
             state = json.loads(state_json)
             
@@ -1997,60 +2096,158 @@ class CanvasEditor(QMainWindow):
             
             self.canvas_images.clear()
             
-            # Restaurar imágenes
+            # Restaurar imágenes con manejo robusto de errores
             for img_data in state['images']:
-                canvas_item = CanvasImageItem(
-                    image_path=img_data['path'],
-                    x=img_data['x'],
-                    y=img_data['y'],
-                    width=img_data['width'],
-                    height=img_data['height'],
-                    rotation=img_data['rotation'],
-                    z_index=img_data['z_index'],
-                    opacity=img_data['opacity'],
-                    locked=img_data['locked'],
-                    visible=img_data['visible'],
-                    original_aspect_ratio=img_data['aspect_ratio']
-                )
-                canvas_item.uuid = img_data['uuid']
-                
-                # Cargar imagen
-                pil_img = Image.open(canvas_item.image_path)
-                
-                if pil_img.mode == 'RGBA':
-                    qimg = ImageQt.ImageQt(pil_img)
-                    pixmap = QPixmap.fromImage(qimg)
-                else:
-                    pil_img_rgb = pil_img.convert('RGB')
-                    data = pil_img_rgb.tobytes("raw", "RGB")
-                    qimg = QImage(data, pil_img_rgb.width, pil_img_rgb.height, QImage.Format.Format_RGB888)
-                    pixmap = QPixmap.fromImage(qimg)
-                
-                width_px = cm_to_pixels(canvas_item.width, self.canvas_dpi)
-                height_px = cm_to_pixels(canvas_item.height, self.canvas_dpi)
-                
-                scaled_pixmap = pixmap.scaled(
-                    int(width_px), int(height_px),
-                    Qt.AspectRatioMode.IgnoreAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation
-                )
-                
-                graphic_item = DraggableImageItem(scaled_pixmap, canvas_item, self)
-                x_px = cm_to_pixels(canvas_item.x, self.canvas_dpi)
-                y_px = cm_to_pixels(canvas_item.y, self.canvas_dpi)
-                graphic_item.setPos(x_px, y_px)
-                graphic_item.setRotation(canvas_item.rotation)
-                graphic_item.setOpacity(canvas_item.opacity)
-                graphic_item.setZValue(canvas_item.z_index)
-                graphic_item.setVisible(canvas_item.visible)
-                
-                self.scene.addItem(graphic_item)
-                self.canvas_images.append(canvas_item)
+                try:
+                    # Verificar si el archivo existe antes de intentar cargarlo
+                    image_path = img_data['path']
+                    if not os.path.exists(image_path):
+                        failed_images.append({
+                            'path': image_path,
+                            'reason': 'Archivo no encontrado'
+                        })
+                        continue
+                    
+                    canvas_item = CanvasImageItem(
+                        image_path=image_path,
+                        x=img_data['x'],
+                        y=img_data['y'],
+                        width=img_data['width'],
+                        height=img_data['height'],
+                        rotation=img_data['rotation'],
+                        z_index=img_data['z_index'],
+                        opacity=img_data['opacity'],
+                        locked=img_data['locked'],
+                        visible=img_data['visible'],
+                        original_aspect_ratio=img_data['aspect_ratio']
+                    )
+                    canvas_item.uuid = img_data['uuid']
+                    
+                    # Cargar imagen con manejo de errores
+                    try:
+                        pil_img = Image.open(canvas_item.image_path)
+                        
+                        if pil_img.mode == 'RGBA':
+                            qimg = ImageQt.ImageQt(pil_img)
+                            pixmap = QPixmap.fromImage(qimg)
+                        else:
+                            pil_img_rgb = pil_img.convert('RGB')
+                            data = pil_img_rgb.tobytes("raw", "RGB")
+                            qimg = QImage(data, pil_img_rgb.width, pil_img_rgb.height, QImage.Format.Format_RGB888)
+                            pixmap = QPixmap.fromImage(qimg)
+                        
+                        width_px = cm_to_pixels(canvas_item.width, self.canvas_dpi)
+                        height_px = cm_to_pixels(canvas_item.height, self.canvas_dpi)
+                        
+                        scaled_pixmap = pixmap.scaled(
+                            int(width_px), int(height_px),
+                            Qt.AspectRatioMode.IgnoreAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation
+                        )
+                        
+                        graphic_item = DraggableImageItem(scaled_pixmap, canvas_item, self)
+                        x_px = cm_to_pixels(canvas_item.x, self.canvas_dpi)
+                        y_px = cm_to_pixels(canvas_item.y, self.canvas_dpi)
+                        graphic_item.setPos(x_px, y_px)
+                        graphic_item.setRotation(canvas_item.rotation)
+                        graphic_item.setOpacity(canvas_item.opacity)
+                        graphic_item.setZValue(canvas_item.z_index)
+                        graphic_item.setVisible(canvas_item.visible)
+                        
+                        self.scene.addItem(graphic_item)
+                        self.canvas_images.append(canvas_item)
+                        
+                    except Exception as e:
+                        failed_images.append({
+                            'path': image_path,
+                            'reason': f'Error al cargar: {str(e)}'
+                        })
+                        print(f"Error cargando imagen {image_path}: {e}")
+                        continue
+                        
+                except KeyError as e:
+                    print(f"Error en datos de imagen: falta campo {e}")
+                    failed_images.append({
+                        'path': img_data.get('path', 'desconocida'),
+                        'reason': f'Datos incompletos: {str(e)}'
+                    })
+                    continue
+                except Exception as e:
+                    print(f"Error restaurando imagen: {e}")
+                    failed_images.append({
+                        'path': img_data.get('path', 'desconocida'),
+                        'reason': str(e)
+                    })
+                    continue
             
             self.update_layers_list()
             
+            # Mostrar diálogo con imágenes fallidas si las hay
+            if failed_images:
+                self.show_missing_images_dialog(failed_images)
+            
+        except json.JSONDecodeError as e:
+            QMessageBox.critical(self, "Error", 
+                               f"Error al decodificar JSON del historial:\n{e}")
+            print(f"Error de JSON en restore_state: {e}")
         except Exception as e:
+            QMessageBox.critical(self, "Error Crítico", 
+                               f"No se pudo restaurar el estado:\n{e}")
             print(f"Error restaurando estado: {e}")
+    
+    def show_missing_images_dialog(self, failed_images):
+        """Mostrar diálogo con imágenes que no se pudieron cargar"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("⚠️ Imágenes No Cargadas")
+        dialog.setMinimumWidth(500)
+        layout = QVBoxLayout()
+        
+        # Mensaje principal
+        msg = QLabel(f"<b>{len(failed_images)} imagen(es) no se pudieron cargar:</b>")
+        layout.addWidget(msg)
+        
+        # Lista de imágenes fallidas
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        list_widget = QWidget()
+        list_layout = QVBoxLayout()
+        
+        for img_info in failed_images:
+            item_layout = QHBoxLayout()
+            
+            # Ícono de error
+            icon_label = QLabel("❌")
+            icon_label.setFixedWidth(30)
+            item_layout.addWidget(icon_label)
+            
+            # Información de la imagen
+            info_label = QLabel(f"<b>Ruta:</b> {img_info['path']}<br>"
+                              f"<b>Razón:</b> {img_info['reason']}")
+            info_label.setWordWrap(True)
+            item_layout.addWidget(info_label, 1)
+            
+            item_widget = QWidget()
+            item_widget.setLayout(item_layout)
+            item_widget.setStyleSheet("QWidget { border: 1px solid #ccc; padding: 5px; margin: 2px; }")
+            list_layout.addWidget(item_widget)
+        
+        list_widget.setLayout(list_layout)
+        scroll.setWidget(list_widget)
+        scroll.setMaximumHeight(300)
+        layout.addWidget(scroll)
+        
+        # Mensaje de ayuda
+        help_msg = QLabel("<i>Estas imágenes fueron omitidas. El resto del estado se restauró correctamente.</i>")
+        help_msg.setWordWrap(True)
+        layout.addWidget(help_msg)
+        
+        # Botones
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        button_box.accepted.connect(dialog.accept)
+        layout.addWidget(button_box)
+        
+        dialog.setLayout(layout)
+        dialog.exec()
     
     def load_custom_templates(self):
         """Cargar plantillas personalizadas desde archivo"""
